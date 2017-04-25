@@ -37,6 +37,7 @@ extern unsigned char mode;
 #endif
 
 extern char relay_hostname[];
+extern char workercnt;
 
 enum logdst { LOGOUT, LOGERR };
 
