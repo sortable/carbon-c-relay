@@ -86,9 +86,13 @@ router_free_intern(route *routes)
 {
 	/* the only thing that isn't allocated using the allocators are the
 	 * regexes */
+	int i;
 	while (routes != NULL) {
-		if (routes->matchtype == REGEX)
-			regfree(&routes->rule);
+		if (routes->matchtype == REGEX) {
+			int regex_count = workercnt + 1;
+			for(i = 0; i < regex_count; ++i)
+				regfree(&routes->rule[i]);
+		}
 
 		if (routes->next == NULL || routes->next->dests != routes->dests) {
 			while (routes->dests != NULL) {
@@ -183,15 +187,20 @@ determine_if_regex(allocator *a, route *r, char *pat)
 		r->strmatch = ra_strdup(a, patbuf);
 		r->pattern = ra_strdup(a, pat);
 	} else {
-		int ret = regcomp(&r->rule, pat, REG_EXTENDED);
-		if (ret != 0)
-			return ret;  /* allow use of regerror */
+		int i;
+		int regex_count = workercnt + 1;
+		r->rule = malloc(sizeof(*r->rule) * regex_count);
+		for(i = 0; i < regex_count; ++i) {
+			int ret = regcomp(&r->rule[i], pat, REG_EXTENDED);
+			if (ret != 0)
+				return ret;  /* allow use of regerror */
+		}
 		r->strmatch = NULL;
 		r->pattern = ra_strdup(a, pat);
-		if (r->rule.re_nsub > 0) {
+		if (r->rule[0].re_nsub > 0) {
 			/* we need +1 because position 0 contains the entire
 			 * expression */
-			r->nmatch = r->rule.re_nsub + 1;
+			r->nmatch = r->rule[0].re_nsub + 1;
 			if (r->nmatch > RE_MAX_MATCHES) {
 				logerr("determine_if_regex: too many match groups, "
 						"please increase RE_MAX_MATCHES in router.h\n");
@@ -469,7 +478,7 @@ router_validate_expression(router *rtr, route **retr, char *pat)
 			char ebuf[512];
 			size_t s = snprintf(ebuf, sizeof(ebuf),
 					"invalid expression '%s': ", pat);
-			regerror(err, &r->rule, ebuf + s, sizeof(ebuf) - s);
+			regerror(err, &r->rule[0], ebuf + s, sizeof(ebuf) - s);
 			return ra_strdup(rtr->a, ebuf);
 		}
 	}
@@ -1918,7 +1927,8 @@ router_metric_matches(
 		const route *r,
 		char *metric,
 		char *firstspace,
-		regmatch_t *pmatch)
+		regmatch_t *pmatch,
+		int dispatcher_id)
 {
 	char ret = 0;
 	char firstspc = *firstspace;
@@ -1933,7 +1943,7 @@ router_metric_matches(
 			break;
 		case REGEX:
 			*firstspace = '\0';
-			ret = regexec(&r->rule, metric, r->nmatch, pmatch, 0) == 0;
+			ret = regexec(&r->rule[dispatcher_id], metric, r->nmatch, pmatch, 0) == 0;
 			*firstspace = firstspc;
 			break;
 		case CONTAINS:
@@ -2142,7 +2152,8 @@ router_route_intern(
 		char *srcaddr,
 		char *metric,
 		char *firstspace,
-		const route *r)
+		const route *r,
+		int dispatcher_id)
 {
 	const route *w;
 	destinations *d;
@@ -2193,8 +2204,9 @@ router_route_intern(
 						srcaddr,
 						metric,
 						firstspace,
-						w->dests->cl->members.routes);
-		} else if (router_metric_matches(w, metric, firstspace, pmatch)) {
+						w->dests->cl->members.routes,
+						dispatcher_id);
+		} else if (router_metric_matches(w, metric, firstspace, pmatch, dispatcher_id)) {
 			stop = w->stop;
 			/* rule matches, send to destination(s) */
 			for (d = w->dests; d != NULL; d = d->next) {
@@ -2339,7 +2351,8 @@ router_route_intern(
 								srcaddr,
 								metric + strlen(w->pattern),
 								firstspace + strlen(w->pattern),
-								w->dests->cl->members.routes);
+								w->dests->cl->members.routes,
+								dispatcher_id);
 					}	break;
 					case VALIDATION: {
 						/* test whether data matches, if not, either log
@@ -2349,7 +2362,8 @@ router_route_intern(
 									w->dests->cl->members.validation->rule,
 									firstspace + 1,
 									lastchr,
-									pmatch))
+									pmatch,
+									dispatcher_id))
 							break;
 
 						if (w->dests->cl->members.validation->action == VAL_LOG)
@@ -2398,13 +2412,14 @@ router_route(
 		size_t retsize,
 		char *srcaddr,
 		char *metric,
-		char *firstspace)
+		char *firstspace,
+		int dispatcher_id)
 {
 	size_t curlen = 0;
 	char blackholed = 0;
 
 	(void)router_route_intern(&blackholed, ret, &curlen, retsize, srcaddr,
-			metric, firstspace, rtr->routes);
+			metric, firstspace, rtr->routes, dispatcher_id);
 
 	*retcnt = curlen;
 	return blackholed;
@@ -2415,7 +2430,7 @@ router_route(
  * triggered.  Useful for testing regular expressions.
  */
 static char
-router_test_intern(char *metric, char *firstspace, route *routes)
+router_test_intern(char *metric, char *firstspace, route *routes, int dispatcher_id)
 {
 	route *w;
 	destinations *d;
@@ -2433,10 +2448,11 @@ router_test_intern(char *metric, char *firstspace, route *routes)
 			gotmatch |= router_test_intern(
 					metric,
 					firstspace,
-					w->dests->cl->members.routes);
+					w->dests->cl->members.routes,
+					dispatcher_id);
 			if (gotmatch & 2)
 				break;
-		} else if (router_metric_matches(w, metric, firstspace, pmatch)) {
+		} else if (router_metric_matches(w, metric, firstspace, pmatch, dispatcher_id)) {
 			gotmatch = 1;
 			switch (w->dests->cl->type) {
 				case AGGREGATION:
@@ -2450,7 +2466,8 @@ router_test_intern(char *metric, char *firstspace, route *routes)
 					gotmatch |= router_test_intern(
 							metric + strlen(w->pattern),
 							firstspace + strlen(w->pattern),
-							w->dests->cl->members.routes);
+							w->dests->cl->members.routes,
+							dispatcher_id);
 					return gotmatch;
 				}	break;
 				default:
@@ -2549,7 +2566,8 @@ router_test_intern(char *metric, char *firstspace, route *routes)
 								gotmatch |= router_test_intern(
 										newmetric,
 										newfirstspace,
-										routes);
+										routes,
+										dispatcher_id);
 							}
 						}
 						if (mode & MODE_DEBUG) {
@@ -2680,7 +2698,8 @@ router_test_intern(char *metric, char *firstspace, route *routes)
 									d->cl->members.validation->rule,
 									firstspace + 1,
 									lastspc,
-									pmatch))
+									pmatch,
+									dispatcher_id))
 						{
 							fprintf(stdout, "        match\n");
 						} else {
@@ -2715,7 +2734,7 @@ router_test(router *rtr, char *metric)
 	for (firstspace = metric; *firstspace != '\0'; firstspace++)
 		if (*firstspace == ' ')
 			break;
-	if (!router_test_intern(metric, firstspace, rtr->routes)) {
+	if (!router_test_intern(metric, firstspace, rtr->routes, 0)) {
 		*firstspace = '\0';
 		fprintf(stdout, "nothing matched %s\n", metric);
 	}
