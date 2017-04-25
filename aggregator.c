@@ -643,6 +643,7 @@ aggregator_expire(void *sub)
 		free(s);
 	}
 
+	free(metric_buffer);
 	return NULL;
 }
 
