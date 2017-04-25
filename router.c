@@ -90,6 +90,7 @@ router_free_intern(cluster *clusters, route *routes)
 			int regex_count = workercnt + 1;
 			for(i = 0; i < regex_count; ++i)
 				regfree(&routes->rule[i]);
+			free(routes->rule);
 		}
 
 		if (routes->next == NULL || routes->next->dests != routes->dests) {
@@ -220,6 +221,10 @@ determine_if_regex(allocator *a, route *r, char *pat)
 		int i;
 		int regex_count = workercnt + 1;
 		r->rule = malloc(sizeof(*r->rule) * regex_count);
+		if (r->rule == NULL) {
+			logerr("malloc failed for regular expressions\n");
+			return 0;
+		}
 		for(i = 0; i < regex_count; ++i) {
 			int ret = regcomp(&r->rule[i], pat, REG_EXTENDED);
 			if (ret != 0)
