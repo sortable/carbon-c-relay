@@ -222,7 +222,7 @@ determine_if_regex(allocator *a, route *r, char *pat)
 		int regex_count = workercnt + 1;
 		r->rule = malloc(sizeof(*r->rule) * regex_count);
 		if (r->rule == NULL) {
-			logerr("malloc failed for regular expressions\n");
+			logerr("determine_if_regex: malloc failed for regular expressions\n");
 			return 0;
 		}
 		for(i = 0; i < regex_count; ++i) {
@@ -509,6 +509,9 @@ router_validate_expression(router *rtr, route **retr, char *pat)
 		r->matchtype = MATCHALL;
 	} else {
 		int err = determine_if_regex(rtr->a, r, pat);
+		if (err == 0 && r->matchtype == REGEX && r->rule == NULL) {
+			return ra_strdup(rtr->a, "Unable to allocate space for compiled regular expressions");
+		}
 		if (err != 0) {
 			char ebuf[512];
 			size_t s = snprintf(ebuf, sizeof(ebuf),
