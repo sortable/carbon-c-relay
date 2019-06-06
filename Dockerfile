@@ -11,9 +11,9 @@ COPY . /opt/carbon-c-relay-build
 RUN \
   apk --no-cache update && \
   apk --no-cache upgrade && \
-  apk --no-cache add git bc build-base curl && \
+  apk --no-cache add git bc build-base curl zlib-dev && \
   cd /opt/carbon-c-relay-build && \
-  ./configure; make && \
+  LDFLAGS=-static ./configure --with-gzip --without-ssl; make && \
   cp relay /usr/bin/carbon-c-relay && \
   apk del --purge git bc build-base ca-certificates curl && \
   rm -rf /opt/* /tmp/* /var/cache/apk/* /opt/carbon-c-relay-build
