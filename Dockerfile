@@ -1,22 +1,19 @@
-FROM alpine:3.6
+FROM ubuntu:16.04
 
-MAINTAINER Fabian Groffen
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends apt-utils build-essential automake autoconf zlib1g-dev
 
 RUN mkdir -p /opt/carbon-c-relay-build
-
-RUN mkdir /etc/carbon-c-relay
 
 COPY . /opt/carbon-c-relay-build
 
 RUN \
-  apk --no-cache update && \
-  apk --no-cache upgrade && \
-  apk --no-cache add git bc build-base curl && \
   cd /opt/carbon-c-relay-build && \
-  ./configure; make && \
-  cp relay /usr/bin/carbon-c-relay && \
-  apk del --purge git bc build-base ca-certificates curl && \
-  rm -rf /opt/* /tmp/* /var/cache/apk/* /opt/carbon-c-relay-build
+  aclocal && \
+  autoconf -i -f && \
+  ./configure --with-gzip --without-ssl && \
+  make && \
+  cp relay /usr/bin/carbon-c-relay
 
 EXPOSE 2003
 
